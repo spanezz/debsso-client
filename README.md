@@ -15,7 +15,7 @@ sure `$TMPDIR` points to volatile or encrypted storage.
 
 It requires `$DEBEMAIL` to be set to the Single Sign-On username.
 
-Dependencies: `libnss3-tools`, `openssl`, `python3-requests`.
+Dependencies: `libnss3-tools`, `python3-openssl`, `python3-requests`.
 
 
 ## TODO

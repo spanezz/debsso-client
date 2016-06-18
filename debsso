@@ -1,67 +1,50 @@
 #!/usr/bin/python3
 # coding: utf-8
-import subprocess
+from debssolib.certs import Certs
+from debssolib.cli import Command, Cli
+import sys
 import tempfile
-import requests
-import ssl
-import os
+import subprocess
 
-class Certs:
-    def __init__(self, workdir):
-        self.workdir = workdir
-        self.dbname = "sql:" + os.path.expanduser("~/.pki/nssdb")
+#    res = requests.get("https://nm.debian.org/api/whoami", cert=(cert_file, key_file))
 
-    def run_certutil(self, args, input=None):
-        cmd = ["certutil", "-d", self.dbname]
-        cmd.extend(args)
-        output = subprocess.check_output(cmd, universal_newlines=True, input=input)
-        return output
+class Curl(Command):
+    """
+    Run curl adding extra options to use Debian SSO client certificates
+    """
+    def argument_parser(self):
+        parser = super().argument_parser()
+        parser.usage = parser.prog + " [curl options...]"
+        return parser
 
-    def run_pk12util(self, args, input=None):
-        cmd = ["pk12util", "-d", self.dbname]
-        cmd.extend(args)
-        output = subprocess.check_output(cmd, universal_newlines=False, input=input)
-        return output
+    def run(self):
+        parser = self.argument_parser()
+        args, unparsed = parser.parse_known_args()
+        certs = Certs()
+        cert, key = certs.extract_from_browser()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            crt_pathname = os.path.join(tmpdir, "sso.crt")
+            with open(crt_pathname, "wb") as fd:
+                os.chmod(fd.fileno(), 0o400)
+                fd.write(cert)
 
-    def get_key_nicks(self):
-        output = self.run_certutil(["-L"])
-        payload = output.split("\n\n")[1]
-        for line in payload.splitlines():
-            nick, flags = line.rsplit(None, 1)
-            yield nick, flags
+            key_pathname = os.path.join(tmpdir, "sso.key")
+            with open(key_pathname, "wb") as fd:
+                os.chmod(fd.fileno(), 0o400)
+                fd.write(key)
 
-    def get_sso_cert_nickname(self):
-        debemail = os.environ.get("DEBEMAIL", None)
-        if debemail is None: raise RuntimeError("$DEBEMAIL is not set")
-        for nick, flags in self.get_key_nicks():
-            if flags != "u,u,u": continue
-            if not nick.startswith(debemail): continue
-            if not "SSO" in nick: continue
-            return nick
-
-    def get_cert(self, nick, outfile):
-        self.run_certutil(["-L", "-n", nick, "-a", "-o", outfile])
-
-    def get_key(self, nick, outfile):
-        pkcs12 = self.run_pk12util(["-n", nick, "-o", "/dev/stdout", "-W", ""])
-        pem = subprocess.check_output(["openssl", "pkcs12", "-nodes", "-passin", "pass:"], input=pkcs12, stderr=open("/dev/null", "wb"))
-        with open(outfile, "wb") as out:
-            out.write(pem)
+            cmd = ["curl", "--key", key_pathname, "--cert", crt_pathname]
+            cmd.extend(unparsed)
+            proc = subprocess.Popen(cmd)
+            res = proc.wait()
+        sys.exit(res)
 
 
-# Try to get SSO keys out of the browser and connect to nm.debian.org with
-# them.
-# Requires $DEBEMAIL to be set.
-# Requires libnss3-tools, openssl, python3-requests
-# Tested with chromium.
+def main():
+    cli = Cli()
+    cli.commands.append(Curl())
+    cli.run()
 
-with tempfile.TemporaryDirectory() as tmpdir:
-    certs = Certs(tmpdir)
-    nick = certs.get_sso_cert_nickname()
-    #print("Nickname:", repr(nick))
-    cert_file = os.path.join(certs.workdir, "tmp.cert")
-    key_file = os.path.join(certs.workdir, "tmp.key")
-    certs.get_cert(nick, cert_file)
-    certs.get_key(nick, key_file)
-    res = requests.get("https://nm.debian.org/api/whoami", cert=(cert_file, key_file))
-    print(res.text)
+
+if __name__ == "__main__":
+    main()
