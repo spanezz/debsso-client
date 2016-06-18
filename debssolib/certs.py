@@ -1,6 +1,8 @@
 # coding: utf-8
 import os
 import subprocess
+import contextlib
+import tempfile
 
 class Browser:
     def __init__(self):
@@ -49,9 +51,9 @@ def pkcs12_to_pem(pkcs12):
     import OpenSSL.crypto
     from OpenSSL.crypto import FILETYPE_PEM
     p = OpenSSL.crypto.load_pkcs12(pkcs12, "")
-    return (
-        OpenSSL.crypto.dump_certificate(FILETYPE_PEM, p.get_certificate()),
-        OpenSSL.crypto.dump_privatekey(FILETYPE_PEM, p.get_privatekey()),
+    return Certs(
+        pem_crt=OpenSSL.crypto.dump_certificate(FILETYPE_PEM, p.get_certificate()),
+        pem_key=OpenSSL.crypto.dump_privatekey(FILETYPE_PEM, p.get_privatekey()),
     )
     #pem_cert = subprocess.check_output(["openssl", "pkcs12", "-nodes", "-passin", "pass:", "-clcerts", "-nokeys"],
     #                                    input=pkcs12, stderr=open("/dev/null", "wb"))
@@ -60,8 +62,39 @@ def pkcs12_to_pem(pkcs12):
     #return pem_cert, pem_key
 
 
+class Certfiles:
+    """
+    Manage certificate files stored in a directory
+    """
+    def __init__(self, dir, basename="sso"):
+        self.dir = dir
+        self.crt_pathname = os.path.join(dir, basename + ".crt")
+        self.key_pathname = os.path.join(dir, basename + ".key")
+
+    def write(self, certs):
+        with open(self.crt_pathname, "wb") as fd:
+            os.chmod(fd.fileno(), 0o400)
+            fd.write(certs.pem_crt)
+
+        with open(self.key_pathname, "wb") as fd:
+            os.chmod(fd.fileno(), 0o400)
+            fd.write(certs.pem_key)
+
+
 class Certs:
-    def extract_from_browser(self):
+    def __init__(self, pem_crt, pem_key):
+        self.pem_crt = pem_crt
+        self.pem_key = pem_key
+
+    @contextlib.contextmanager
+    def tempfiles(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = Certfiles(tmpdir)
+            files.write(self)
+            yield files
+
+    @classmethod
+    def from_browser(cls):
         """
         Return PEM-encoded (certificate, key) extracted from libnss3 key
         storage used by common web browsers.
@@ -75,4 +108,3 @@ class Certs:
         nick = browser.get_sso_cert_nickname()
         pkcs12 = browser.get_key_pkcs12(nick)
         return pkcs12_to_pem(pkcs12)
-

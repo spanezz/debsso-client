@@ -3,10 +3,8 @@
 from debssolib.certs import Certs
 from debssolib.cli import Command, Cli
 import sys
-import tempfile
 import subprocess
-
-#    res = requests.get("https://nm.debian.org/api/whoami", cert=(cert_file, key_file))
+import requests
 
 class Curl(Command):
     """
@@ -20,29 +18,31 @@ class Curl(Command):
     def run(self):
         parser = self.argument_parser()
         args, unparsed = parser.parse_known_args()
-        certs = Certs()
-        cert, key = certs.extract_from_browser()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            crt_pathname = os.path.join(tmpdir, "sso.crt")
-            with open(crt_pathname, "wb") as fd:
-                os.chmod(fd.fileno(), 0o400)
-                fd.write(cert)
-
-            key_pathname = os.path.join(tmpdir, "sso.key")
-            with open(key_pathname, "wb") as fd:
-                os.chmod(fd.fileno(), 0o400)
-                fd.write(key)
-
-            cmd = ["curl", "--key", key_pathname, "--cert", crt_pathname]
+        certs = Certs.from_browser()
+        with certs.tempfiles() as files:
+            cmd = ["curl", "--key", files.key_pathname, "--cert", files.crt_pathname]
             cmd.extend(unparsed)
             proc = subprocess.Popen(cmd)
             res = proc.wait()
         sys.exit(res)
 
 
+class Whoami(Command):
+    """
+    Connect to https://nm.debian.org/api/whoami and return information about
+    the current user.
+    """
+    def run(self):
+        certs = Certs.from_browser()
+        with certs.tempfiles() as files:
+            res = requests.get("https://nm.debian.org/api/whoami", cert=(files.crt_pathname, files.key_pathname))
+            print(res.text)
+
+
 def main():
     cli = Cli()
     cli.commands.append(Curl())
+    cli.commands.append(Whoami())
     cli.run()
 
 
