@@ -2,6 +2,7 @@
 # coding: utf-8
 from debssolib.certs import Certs
 from debssolib.cli import Command, Cli
+from debssolib.advocate import Advocate
 import sys
 import subprocess
 import requests
@@ -43,6 +44,7 @@ def main():
     cli = Cli()
     cli.commands.append(Curl())
     cli.commands.append(Whoami())
+    cli.commands.append(Advocate())
     cli.run()
 
 
