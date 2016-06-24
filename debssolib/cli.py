@@ -30,7 +30,7 @@ class Cli:
         self.commands = []
 
     def get_usage(self):
-        usage = ["%(prog)s <command> [<args>]", "", "Avalable commands:"]
+        usage = ["%(prog)s <command> [<args>]", "", "Available commands:"]
         cmds = []
         for cmd in self.commands:
             cmds.append((cmd.name, cmd.description))
