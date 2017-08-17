@@ -1,6 +1,7 @@
 import os
 import subprocess
 import contextlib
+import requests
 import tempfile
 
 class Browser:
@@ -91,6 +92,13 @@ class Certs:
             files = Certfiles(tmpdir)
             files.write(self)
             yield files
+
+    @contextlib.contextmanager
+    def requests(self):
+        with self.tempfiles() as files:
+            with requests.Session() as session:
+                session.cert = (files.crt_pathname, files.key_pathname)
+                yield session
 
     @classmethod
     def from_browser(cls):

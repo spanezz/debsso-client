@@ -1,51 +1,61 @@
 #!/usr/bin/python3
 from debssolib.certs import Certs
-from debssolib.cli import Command, Cli
 from debssolib.advocate import Advocate
 import sys
 import os
 import subprocess
 import requests
+import argparse
+import logging
+
+
+class Command:
+    @classmethod
+    def add_parser(cls, subparsers):
+        doc = [line.strip() for line in cls.__doc__.splitlines()]
+        sp = subparsers.add_parser(cls.__name__.lower(), help=" ".join(doc).strip())
+        sp.set_defaults(cls=cls)
+        return sp
+
 
 class Exec(Command):
     """
-    Run curl adding extra options to use Debian SSO client certificates
+    Exec command with client certificates available in the file system. Use --
+    before the rest of the command line
     """
-    def argument_parser(self):
-        parser = super().argument_parser()
-        parser.usage = parser.prog + " [command options...]"
-        return parser
+    @classmethod
+    def add_parser(cls, subparsers):
+        sp = super().add_parser(subparsers)
+        sp.add_argument("args", nargs="+", help="command line to exec")
+        return sp
 
-    def run(self):
-        parser = self.argument_parser()
-        args, unparsed = parser.parse_known_args()
+    def run(self, args):
         certs = Certs.from_browser()
         with certs.tempfiles() as files:
             env = dict(os.environ)
             # TODO: export common wget/curl envs for certs if they exist
             env["DEBSSO_CERT_KEY"] = files.key_pathname
             env["DEBSSO_CERT_CRT"] = files.crt_pathname
-            proc = subprocess.Popen(unparsed, env=env)
+            proc = subprocess.Popen(args.args, env=env)
             res = proc.wait()
         sys.exit(res)
 
 
 class Curl(Command):
     """
-    Run curl adding extra options to use Debian SSO client certificates
+    Run curl adding options to use client certificates. Use -- before the rest of the curl command line
     """
-    def argument_parser(self):
-        parser = super().argument_parser()
-        parser.usage = parser.prog + " [curl options...]"
-        return parser
+    @classmethod
+    def add_parser(cls, subparsers):
+        sp = super().add_parser(subparsers)
+        sp.add_argument("args", nargs="+", help="curl arguments")
+        return sp
 
-    def run(self):
-        parser = self.argument_parser()
-        args, unparsed = parser.parse_known_args()
+    def run(self, args):
         certs = Certs.from_browser()
         with certs.tempfiles() as files:
             cmd = ["curl", "--key", files.key_pathname, "--cert", files.crt_pathname]
-            cmd.extend(unparsed)
+            cmd.extend(args.args)
             proc = subprocess.Popen(cmd)
             res = proc.wait()
         sys.exit(res)
@@ -53,23 +63,40 @@ class Curl(Command):
 
 class Whoami(Command):
     """
-    Connect to https://nm.debian.org/api/whoami and return information about
-    the current user.
+    Authenticate and get user information
     """
-    def run(self):
+    def run(self, args):
         certs = Certs.from_browser()
-        with certs.tempfiles() as files:
-            res = requests.get("https://nm.debian.org/api/whoami", cert=(files.crt_pathname, files.key_pathname))
+        with certs.requests() as req:
+            res = req.get("https://nm.debian.org/api/whoami")
             print(res.text)
 
 
 def main():
-    cli = Cli()
-    cli.commands.append(Curl())
-    cli.commands.append(Exec())
-    cli.commands.append(Whoami())
-    cli.commands.append(Advocate())
-    cli.run()
+    parser = argparse.ArgumentParser(
+        prog="debsso",
+        description="Debian Single Sign-On command line client utility",
+    )
+    parser.add_argument("-v", "--verbose", type=bool, help="Verbose output")
+    parser.add_argument("--debug", type=bool, help="Debug output")
+    subparsers = parser.add_subparsers()
+
+    Whoami.add_parser(subparsers)
+    Exec.add_parser(subparsers)
+    Curl.add_parser(subparsers)
+
+    args = parser.parse_args()
+
+    # Setup logging
+    FORMAT = "%(levelname)s %(message)s"
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, stream=sys.stderr, format=FORMAT)
+    elif args.verbose:
+        logging.basicConfig(level=logging.INFO, stream=sys.stderr, format=FORMAT)
+    else:
+        logging.basicConfig(level=logging.WARN, stream=sys.stderr, format=FORMAT)
+
+    args.cls().run(args)
 
 
 if __name__ == "__main__":
