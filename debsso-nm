@@ -4,6 +4,8 @@ from debssolib.utils import Cli, Command
 import sys
 import os
 import subprocess
+import cmd
+import tempfile
 import logging
 
 log = logging.getLogger()
@@ -83,12 +85,107 @@ class Advocate(Command):
                 sys.exit(1)
 
 
+class ApprovalsCmd(cmd.Cmd):
+    intro = "Welcome to debsso-nm approvals. Use '?' or 'help' for help.\n"
+    prompt = "> "
+
+    def __init__(self, requests):
+        super().__init__()
+        self.requests = requests
+        self.process_cache = []
+        self.current_process = None
+
+    def do_ls(self, arg):
+        """
+        Show processes pending approval
+        """
+        if not self.process_cache:
+            res = self.requests.get("https://nm.debian.org/rest/api/processes/?format=json")
+            self.process_cache = res.json()
+            self._set_current_process(None)
+        
+        import texttable
+        table = texttable.Texttable()
+        table.set_deco(0)
+        table.add_row(("idx", "id", "status", "for", "uid", "name"))
+        for idx, process in enumerate(self.process_cache, start=1):
+            flags = (
+                ("f" if process["frozen_by"] else "-") +
+                ("a" if process["approved_by"] else "-") +
+                ("c" if process["closed"] else "-")
+            )
+            table.add_row((
+                idx,
+                process["id"],
+                flags,
+                process["applying_for"],
+                process["person"]["uid"],
+                process["person"]["fullname"]))
+        print(table.draw())
+
+    def _set_current_process(self, process=None):
+        if process is None:
+            self.current_process = None
+            self.prompt = "> "
+        else:
+            self.current_process = process
+            self.prompt = "{}→{}> ".format(process["person"]["uid"], process["applying_for"])
+
+
+    def _do_process(self, idx):
+        if idx - 1 >= len(self.process_cache):
+            print("Invalid process #{}".format(idx))
+            return
+        self._set_current_process(self.process_cache[idx - 1])
+
+    def do_mbox(self, arg):
+        """
+        Show the mailbox of the currently selected process in mutt
+        """
+        if self.current_process is None:
+            print("Choose a process first")
+            return
+        res = self.requests.get("https://nm.debian.org/process/{}/mailbox/download".format(self.current_process["id"]))
+        with tempfile.NamedTemporaryFile("wb", suffix=".mbox.gz") as f:
+            f.write(res.content)
+            f.flush()
+            subprocess.run(["mutt", "-f", f.name])
+            subprocess.run(["bash"])
+
+    def default(self, line):
+        if line.isdigit():
+            return self._do_process(int(line))
+        return super().default(line)
+
+    def do_quit(self, arg):
+        """
+        Quit approvals interface
+        """
+        return True
+
+    def do_EOF(self, arg):
+        print("quit")
+        return True
+
+
+class Approvals(Command):
+    """
+    Interactive process approval interface
+    """
+    def run(self, args):
+        certs = Certs.from_browser()
+        with certs.requests() as req:
+            app = ApprovalsCmd(req)
+            app.cmdloop()
+
+
 def main():
     cli = Cli(
         prog="debsso-nm",
         description="Debian Single Sign-On command line client utility",
     )
     cli.add_command(Advocate)
+    cli.add_command(Approvals)
     cli.main()
 
 
