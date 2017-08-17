@@ -1,10 +1,8 @@
 #!/usr/bin/python3
 from debssolib.certs import Certs
-from debssolib.advocate import Advocate
 import sys
 import os
 import subprocess
-import requests
 import argparse
 import logging
 

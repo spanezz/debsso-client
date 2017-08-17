@@ -82,6 +82,10 @@ class Certfiles:
 
 
 class Certs:
+    """
+    OpenSSL client certificate information, as a key and a certificate,
+    PEM-encoded
+    """
     def __init__(self, pem_crt, pem_key):
         self.pem_crt = pem_crt
         self.pem_key = pem_key
