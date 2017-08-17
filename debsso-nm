@@ -5,6 +5,7 @@ import sys
 import os
 import subprocess
 import cmd
+import shutil
 import tempfile
 import logging
 
@@ -94,6 +95,15 @@ class ApprovalsCmd(cmd.Cmd):
         self.requests = requests
         self.process_cache = []
         self.current_process = None
+        self.tmpdir = tempfile.TemporaryDirectory()
+
+        # Copy the user gpghome into a working copy
+        self.user_gpghome = os.environ.get("GNUPGHOME", os.path.expanduser("~/.gnupg"))
+        log.info("Making a local working copy of %s", self.user_gpghome)
+        self.dest_gpghome = os.path.join(self.tmpdir.name, ".gnupg")
+        shutil.copytree(self.user_gpghome, self.dest_gpghome)
+        self.env = dict(os.environ)
+        self.env["GNUPGHOME"] = self.dest_gpghome
 
     def do_ls(self, arg):
         """
@@ -145,16 +155,29 @@ class ApprovalsCmd(cmd.Cmd):
         if self.current_process is None:
             print("Choose a process first")
             return
-        res = self.requests.get("https://nm.debian.org/process/{}/mailbox/download".format(self.current_process["id"]))
+        process = self.current_process
+
+        # Import the applicant's key
+        log.info("Importing applicant key %s", process["person"]["fpr"])
+        subprocess.run(["gpg", "--recv", process["person"]["fpr"]], env=self.env)
+
+        # TODO: also import the AM and all advocates' keys
+
+
+        log.info("Retrieving mailbox")
+        res = self.requests.get("https://nm.debian.org/process/{}/mailbox/download".format(process["id"]))
+
         with tempfile.NamedTemporaryFile("wb", suffix=".mbox.gz") as f:
             f.write(res.content)
             f.flush()
-            subprocess.run(["mutt", "-f", f.name])
-            subprocess.run(["bash"])
+            subprocess.run(["mutt", "-f", f.name], env=self.env)
 
     def default(self, line):
         if line.isdigit():
             return self._do_process(int(line))
+        elif line == "!":
+            subprocess.run([os.environ["SHELL"]], env=self.env)
+            return
         return super().default(line)
 
     def do_quit(self, arg):
