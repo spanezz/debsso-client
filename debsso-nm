@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+from debssolib.certs import Certs
+from debssolib.utils import Cli, Command
+import sys
+import os
+import subprocess
+import logging
+
+log = logging.getLogger()
+
+
+class Advocate(Command):
+    """
+    Read a signed statement and post it as an advocacy message
+    """
+    @classmethod
+    def add_parser(cls, subparsers):
+        sp = super().add_parser(subparsers)
+        sp.add_argument("process", type=int, help="Process number")
+        sp.add_argument("file", nargs="?", help="File with the unsigned statement (default: stdin)")
+        return sp
+
+    def run(self, args):
+        if args.file:
+            with open(args.file, "rb") as infd:
+                data = infd.read()
+        else:
+            data = sys.stdin.read()
+
+        certs = Certs.from_browser()
+        with certs.requests() as req:
+            signed = self._sign_statement(req, data)
+            self._submit(req, args.process, signed)
+
+    def _get_fingerprint(self, req):
+        res = req.get("https://nm.debian.org/api/whoami")
+        whoami = res.json()
+        uid = whoami.get("uid", "<uid unknown>")
+        fpr = whoami.get("fpr")
+        if fpr is None:
+            raise Fail("I could not find a valid fingerprint for user {} on nm.debian.org".format(uid))
+        log.info("Statement to be signed as %s with key %s", uid, fpr)
+        return fpr
+
+    def _sign_statement(self, req, data):
+        """
+        Sign a statement with the key the current user has on nm.debian.org,
+        and return the clearsigned data
+        """
+        fpr = self._get_fingerprint(req)
+    
+        cmd = ["gpg", "--clearsign", "--default-key", fpr]
+        res = subprocess.run(cmd, input=data, stdout=subprocess.PIPE, universal_newlines=True)
+        if res.returncode != 0:
+            raise Fail("gpg exited with error code {}".format(res.returncode))
+
+        return res.stdout
+
+    def _submit(self, req, process, signed):
+        url = "https://nm.debian.org/process/{}/advocate/statement/create".format(process)
+        res = session.get(url, **cert_args)
+        res.raise_for_status()
+        res = session.post(url,
+                        allow_redirects=False,
+                        headers={
+                            "Referer": url,
+                            "X-CSRFToken": res.cookies["csrftoken"],
+                        },
+                        data={
+                            "csrfmiddlewaretoken": res.cookies["csrftoken"],
+                            "statement": signed,
+                        }, **cert_args)
+        res.raise_for_status()
+        if res.status_code == 200:
+            from lxml.html import document_fromstring
+            page = document_fromstring(res.content)
+            for el in page.iter("ul"):
+                _class = el.attrib.get("class", None)
+                if _class is None: continue
+                if "errorlist" not in _class: continue
+                for li in el.iter("li"):
+                    print(li.text, file=sys.stderr)
+                sys.exit(1)
+
+
+def main():
+    cli = Cli(
+        prog="debsso-nm",
+        description="Debian Single Sign-On command line client utility",
+    )
+    cli.add_command(Advocate)
+    cli.main()
+
+
+if __name__ == "__main__":
+    main()

@@ -3,6 +3,10 @@ import logging
 import sys
 
 
+class Fail(Exception):
+    pass
+
+
 class Command:
     @classmethod
     def add_parser(cls, subparsers):
@@ -15,8 +19,8 @@ class Command:
 class Cli:
     def __init__(self, *args, **kw):
         self.parser = argparse.ArgumentParser(*args, **kw)
-        self.parser.add_argument("-v", "--verbose", type=bool, help="Verbose output")
-        self.parser.add_argument("--debug", type=bool, help="Debug output")
+        self.parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+        self.parser.add_argument("--debug", action="store_true", help="Debug output")
         self.subparsers = self.parser.add_subparsers()
 
     def add_command(self, cls):
@@ -34,4 +38,10 @@ class Cli:
         else:
             logging.basicConfig(level=logging.WARN, stream=sys.stderr, format=FORMAT)
 
-        args.cls().run(args)
+        try:
+            args.cls().run(args)
+        except Fail as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+
+        sys.exit(0)
