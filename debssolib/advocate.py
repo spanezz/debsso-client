@@ -1,4 +1,3 @@
-# coding: utf-8
 from debssolib.cli import Command
 from debssolib.certs import Certs
 import requests

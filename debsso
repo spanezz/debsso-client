@@ -1,11 +1,34 @@
 #!/usr/bin/python3
-# coding: utf-8
 from debssolib.certs import Certs
 from debssolib.cli import Command, Cli
 from debssolib.advocate import Advocate
 import sys
+import os
 import subprocess
 import requests
+
+class Exec(Command):
+    """
+    Run curl adding extra options to use Debian SSO client certificates
+    """
+    def argument_parser(self):
+        parser = super().argument_parser()
+        parser.usage = parser.prog + " [command options...]"
+        return parser
+
+    def run(self):
+        parser = self.argument_parser()
+        args, unparsed = parser.parse_known_args()
+        certs = Certs.from_browser()
+        with certs.tempfiles() as files:
+            env = dict(os.environ)
+            # TODO: export common wget/curl envs for certs if they exist
+            env["DEBSSO_CERT_KEY"] = files.key_pathname
+            env["DEBSSO_CERT_CRT"] = files.crt_pathname
+            proc = subprocess.Popen(unparsed, env=env)
+            res = proc.wait()
+        sys.exit(res)
+
 
 class Curl(Command):
     """
@@ -43,6 +66,7 @@ class Whoami(Command):
 def main():
     cli = Cli()
     cli.commands.append(Curl())
+    cli.commands.append(Exec())
     cli.commands.append(Whoami())
     cli.commands.append(Advocate())
     cli.run()
