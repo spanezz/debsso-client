@@ -129,6 +129,7 @@ class MakeCert(Command):
 
         log.info("Writing key to %s.key", args.username)
         with open(args.username + ".key", "wt") as out:
+            os.fchmod(out.fileno(), 0o400)
             out.write(key)
 
         log.info("Writing cert to %s.crt", args.username)
