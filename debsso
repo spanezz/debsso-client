@@ -3,9 +3,13 @@ from debssolib.certs import Certs
 from debssolib.utils import Cli, Command
 import sys
 import os
+import shlex
 import subprocess
+import requests
 import argparse
 import logging
+
+log = logging.getLogger()
 
 
 class Exec(Command):
@@ -62,6 +66,76 @@ class Whoami(Command):
             print(res.text)
 
 
+class MakeCert(Command):
+    """
+    Get a new Debian Single SignOn certificate
+    """
+    @classmethod
+    def add_parser(cls, subparsers):
+        sp = super().add_parser(subparsers)
+        sp.add_argument("username", help="account user name")
+        sp.add_argument("--domain", default=None, help="override domain (debian or alioth, default inferred from user name)")
+        sp.add_argument("-d", "--days", default=365, type=int, help="certificate duration in days")
+        sp.add_argument("-c", "--comment", default=None, help="description for this certificate in the sso.debian.org user interface")
+        sp.add_argument("-s", "--size", default=2048, help="RSA key size")
+        return sp
+
+    def run(self, args):
+        from getpass import getpass
+        if args.domain is None:
+            if args.username.endswith("-guest"):
+                domain = "alioth"
+            else:
+                domain = "debian"
+        else:
+            domain = args.domain
+
+        if domain == "debian":
+            pw_type = "Debian Web password"
+        else:
+            pw_type = "Alioth password"
+
+        password = getpass("Enter your {} password: ".format(pw_type))
+
+        session = requests.session()
+        session.auth = (args.username, password)
+        url = "https://sso.debian.org/{domain}/certs/enroll_csr/".format(domain=domain)
+        r = session.get(url + "?format=json")
+        r.raise_for_status()
+        info = r.json()
+
+        def run_openssl(*args, **kw):
+            log.info("Running %s", " ".join(shlex.quote(x) for x in args))
+            r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, **kw)
+            r.check_returncode()
+            return r
+
+        r = run_openssl("openssl", "genrsa", str(args.size))
+        key = r.stdout
+
+        r = run_openssl("openssl", "req", "-new", "-sha256", "-subj", info["subject"], "-key", "-", "-batch", input=key)
+        csr = r.stdout
+
+        r = session.post(url, data={
+            "csr": csr,
+            "validity": args.days,
+            "comment": args.comment,
+        }, headers={
+            "Referer": url,
+            "X-CSRFToken": info["csrf_token"],
+        })
+        r.raise_for_status()
+        crt = r.text
+
+        log.info("Writing key to %s.key", args.username)
+        with open(args.username + ".key", "wt") as out:
+            out.write(key)
+
+        log.info("Writing cert to %s.crt", args.username)
+        with open(args.username + ".crt", "wt") as out:
+            out.write(crt)
+
+
 def main():
     cli = Cli(
         prog="debsso",
@@ -70,6 +144,7 @@ def main():
     cli.add_command(Whoami)
     cli.add_command(Exec)
     cli.add_command(Curl)
+    cli.add_command(MakeCert)
     cli.main()
 
 

@@ -11,13 +11,18 @@ class Command:
     @classmethod
     def add_parser(cls, subparsers):
         doc = [line.strip() for line in cls.__doc__.splitlines()]
-        sp = subparsers.add_parser(cls.__name__.lower(), help=" ".join(doc).strip())
+        sp = subparsers.add_parser(
+            cls.__name__.lower(),
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help=" ".join(doc).strip()
+        )
         sp.set_defaults(cls=cls)
         return sp
 
 
 class Cli:
     def __init__(self, *args, **kw):
+        kw.setdefault("formatter_class", argparse.ArgumentDefaultsHelpFormatter)
         self.parser = argparse.ArgumentParser(*args, **kw)
         self.parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
         self.parser.add_argument("--debug", action="store_true", help="Debug output")
@@ -37,6 +42,10 @@ class Cli:
             logging.basicConfig(level=logging.INFO, stream=sys.stderr, format=FORMAT)
         else:
             logging.basicConfig(level=logging.WARN, stream=sys.stderr, format=FORMAT)
+
+        if not hasattr(args, "cls"):
+            self.parser.print_help()
+            sys.exit(1)
 
         try:
             args.cls().run(args)
