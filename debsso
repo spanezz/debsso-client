@@ -113,7 +113,7 @@ class MakeCert(Command):
         r = run_openssl("openssl", "genrsa", str(args.size))
         key = r.stdout
 
-        r = run_openssl("openssl", "req", "-new", "-sha256", "-subj", info["subject"], "-key", "-", "-batch", input=key)
+        r = run_openssl("openssl", "req", "-new", "-sha256", "-key", "-", "-batch", input=key)
         csr = r.stdout
 
         r = session.post(url, data={
