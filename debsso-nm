@@ -104,6 +104,7 @@ class ApprovalsCmd(cmd.Cmd):
         shutil.copytree(self.user_gpghome, self.dest_gpghome)
         self.env = dict(os.environ)
         self.env["GNUPGHOME"] = self.dest_gpghome
+        #subprocess.run(["/bin/bash"], env=self.env)
 
     def do_ls(self, arg):
         """
@@ -111,7 +112,8 @@ class ApprovalsCmd(cmd.Cmd):
         """
         if not self.process_cache:
             res = self.requests.get("https://nm.debian.org/rest/api/processes/?format=json")
-            self.process_cache = res.json()
+            # self.process_cache = res.json()
+            self.process_cache = [x for x in res.json() if x["frozen_by"] and not x["approved_by"]]
             self._set_current_process(None)
         
         import texttable
@@ -122,7 +124,7 @@ class ApprovalsCmd(cmd.Cmd):
             flags = (
                 ("f" if process["frozen_by"] else "-") +
                 ("a" if process["approved_by"] else "-") +
-                ("c" if process["closed"] else "-")
+                ("c" if process["closed_by"] else "-")
             )
             table.add_row((
                 idx,
@@ -141,7 +143,6 @@ class ApprovalsCmd(cmd.Cmd):
             self.current_process = process
             self.prompt = "{}→{}> ".format(process["person"]["uid"], process["applying_for"])
 
-
     def _do_process(self, idx):
         if idx - 1 >= len(self.process_cache):
             print("Invalid process #{}".format(idx))
@@ -159,10 +160,11 @@ class ApprovalsCmd(cmd.Cmd):
 
         # Import the applicant's key
         log.info("Importing applicant key %s", process["person"]["fpr"])
-        subprocess.run(["gpg", "--recv", process["person"]["fpr"]], env=self.env)
+        res = subprocess.run(["gpg", "--recv", process["person"]["fpr"]], env=self.env)
+        if res.returncode != 0:
+            print("Failed to import applicant key: aborting.")
 
         # TODO: also import the AM and all advocates' keys
-
 
         log.info("Retrieving mailbox")
         res = self.requests.get("https://nm.debian.org/process/{}/mailbox/download".format(process["id"]))
@@ -171,6 +173,33 @@ class ApprovalsCmd(cmd.Cmd):
             f.write(res.content)
             f.flush()
             subprocess.run(["mutt", "-f", f.name], env=self.env)
+
+    def do_approve(self, arg):
+        if self.current_process is None:
+            print("Choose a process first")
+            return
+        process = self.current_process
+
+        url = "https://nm.debian.org/process/{}/approve".format(process["id"])
+
+        res = self.requests.get(url + "?format=json")
+        res.raise_for_status()
+
+        approve = ApproveCmd(process, res.json(), self.env)
+        approve.cmdloop()
+
+        if approve.accepted:
+            r = self.requests.post(url, data={
+                "signed": approve.edited,
+            }, headers={
+                "Referer": url,
+                "X-CSRFToken": approve.info["csrf_token"],
+            })
+            r.raise_for_status()
+            print("Approved.")
+            self.process_cache = []
+            self.do_ls(None)
+    do_a = do_approve
 
     def default(self, line):
         if line.isdigit():
@@ -185,9 +214,70 @@ class ApprovalsCmd(cmd.Cmd):
         Quit approvals interface
         """
         return True
+    do_q = do_quit
 
     def do_EOF(self, arg):
         print("quit")
+        return True
+
+
+class ApproveCmd(cmd.Cmd):
+    prompt = "Approve? (View/Edit/Reset/Sign/Upload/Quit)> "
+
+    def __init__(self, process, info, env):
+        super().__init__()
+        self.process = process
+        self.info = info
+        self.edited = info["text"]
+        self.accepted = False
+        self.env = env
+        self.do_view(None)
+
+    def do_view(self, arg):
+        for k, v in self.info["rt_content"]:
+            print("{}: {}".format(k, v))
+        print(self.edited)
+    do_v = do_view
+
+    def do_edit(self, arg):
+        with tempfile.NamedTemporaryFile("wt") as f:
+            f.write(self.edited)
+            f.flush()
+            r = subprocess.run(["sensible-editor"], f.name, env=self.env)
+            if r.returncode:
+                print("Editor exited with error code {}: aborting.".format(r.returncode))
+                return
+            f.seek(0)
+            self.edited = f.read()
+        self.do_view(None)
+    do_e = do_edit
+
+    def do_reset(self, arg):
+        self.edited = self.info["text"]
+        self.do_view(None)
+    do_r = do_reset
+
+    def do_sign(self, arg):
+        res = subprocess.run(["gpg", "--clearsign"], input=self.edited, stdout=subprocess.PIPE, env=self.env, universal_newlines=True)
+        if res.returncode:
+            print("gpg exited with error code {}: aborting.".format(r.returncode))
+            return
+        self.edited = res.stdout
+        self.do_view(None)
+    do_s = do_sign
+
+    def do_upload(self, arg):
+        if not self.edited.startswith("-----BEGIN PGP SIGNED MESSAGE-----"):
+            self.do_sign(None)
+        self.accepted = True
+        return True
+    do_u = do_upload
+
+    def do_quit(self, arg):
+        return True
+    do_q = do_quit
+
+    def do_EOF(self, arg):
         return True
 
 
